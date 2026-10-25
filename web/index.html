@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>nftables Control Panel</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.5;
+      padding: 24px;
+    }
+    .container { max-width: 1100px; margin: 0 auto; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
+    .brand .tag {
+      background: rgba(59, 130, 246, 0.2);
+      color: var(--primary);
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .header-actions { display: flex; gap: 10px; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.15s ease;
+    }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-outline { background: transparent; border-color: var(--border); color: var(--text); }
+    .btn-outline:hover { background: var(--border); }
+    .btn-danger { background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.3); color: var(--danger); }
+    .btn-danger:hover { background: var(--danger); color: white; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+    /* Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .stat-label { font-size: 13px; color: var(--text-muted); }
+    .stat-value { font-size: 20px; font-weight: 700; margin-top: 4px; display: flex; align-items: center; gap: 8px; }
+    .badge-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .dot-success { background: var(--success); box-shadow: 0 0 8px var(--success); }
+
+    /* Navigation Tabs */
+    .tabs {
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+    .tab-btn {
+      padding: 10px 16px;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-weight: 500;
+      font-size: 14px;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+    .tab-btn.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+    }
+
+    /* Content Area */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .card-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .card-title { font-size: 16px; font-weight: 600; }
+
+    /* Table */
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th {
+      background: rgba(15, 23, 42, 0.4);
+      padding: 12px 16px;
+      font-size: 13px;
+      color: var(--text-muted);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: 12px 16px;
+      font-size: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255, 255, 255, 0.02); }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .badge-tcp { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+    .badge-udp { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+    .badge-both { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
+
+    /* Modal Form */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+    .modal-overlay.open { opacity: 1; pointer-events: auto; }
+    .modal {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 100%;
+      max-width: 480px;
+      padding: 24px;
+      box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5);
+    }
+    .modal-title { font-size: 18px; font-weight: 700; margin-bottom: 16px; }
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 6px; }
+    .form-control {
+      width: 100%;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      outline: none;
+    }
+    .form-control:focus { border-color: var(--primary); }
+    .input-group { display: flex; gap: 8px; }
+
+    /* Raw Ruleset Box */
+    pre.ruleset-box {
+      background: #090d16;
+      padding: 16px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: #38bdf8;
+      overflow-x: auto;
+      max-height: 520px;
+      line-height: 1.6;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 48px 16px;
+      color: var(--text-muted);
+    }
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 12px 20px;
+      border-radius: 6px;
+      box-shadow: 0 10px 15px -3px rgba(0,0,0,0.4);
+      display: none;
+      z-index: 200;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--primary)"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="m9 9 6 6"/><path d="m15 9-6 6"/></svg>
+        <h1>nftables 控制面板</h1>
+        <span class="tag">v1.0.0</span>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-outline" onclick="saveRuleset()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          持久化保存
+        </button>
+        <button class="btn btn-primary" onclick="openAddModal()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          新建端口转发
+        </button>
+      </div>
+    </header>
+
+    <!-- 状态面板 -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">nftables 状态</div>
+        <div class="stat-value">
+          <span class="badge-dot dot-success"></span>
+          <span id="nft-status">运行中</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">IPv4 转发 (ip_forward)</div>
+        <div class="stat-value" id="forward-status">已启用</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">活跃转发规则</div>
+        <div class="stat-value" id="rule-count">0 条</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">监听地址</div>
+        <div class="stat-value" style="font-size: 15px;" id="server-addr">加载中...</div>
+      </div>
+    </div>
+
+    <!-- 导航切换 -->
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('forward')">端口转发 (NAT)</button>
+      <button class="tab-btn" onclick="switchTab('raw')">完整规则集 (Ruleset)</button>
+    </div>
+
+    <!-- 转发规则卡片 -->
+    <div id="tab-forward" class="card">
+      <div class="card-header">
+        <div class="card-title">端口转发规则列表 (DNAT / Redirect)</div>
+        <button class="btn btn-outline btn-sm" onclick="loadRules()">刷新</button>
+      </div>
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th width="80">协议</th>
+              <th>监听端口 (Src)</th>
+              <th>目标地址 (Target)</th>
+              <th>类型</th>
+              <th>备注</th>
+              <th width="100">句柄 (Handle)</th>
+              <th width="100" style="text-align: right;">操作</th>
+            </tr>
+          </thead>
+          <tbody id="rules-tbody">
+            <tr><td colspan="7" class="empty-state">正在获取规则列表...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 原始规则集卡片 -->
+    <div id="tab-raw" class="card" style="display: none;">
+      <div class="card-header">
+        <div class="card-title">当前内存中的 nftables Ruleset</div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-outline btn-sm" onclick="loadRawRuleset()">刷新</button>
+          <button class="btn btn-danger btn-sm" onclick="flushRuleset()">一键清空全部</button>
+        </div>
+      </div>
+      <pre class="ruleset-box" id="raw-ruleset">加载中...</pre>
+    </div>
+  </div>
+
+  <!-- 新增转发模态窗 -->
+  <div class="modal-overlay" id="addModal">
+    <div class="modal">
+      <div class="modal-title">添加端口转发</div>
+      <form id="addRuleForm" onsubmit="submitRule(event)">
+        <div class="form-group">
+          <label>协议类型</label>
+          <select class="form-control" id="ruleProto">
+            <option value="both">TCP + UDP (推荐)</option>
+            <option value="tcp">仅 TCP</option>
+            <option value="udp">仅 UDP</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>本地监听端口</label>
+          <div class="input-group">
+            <input type="number" class="form-control" id="ruleSrcPort" placeholder="例如: 8443 (留空随机生成)" min="1" max="65535">
+            <button type="button" class="btn btn-outline" onclick="generateRandomPort()">🎲 随机</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>目标地址 (支持 IP / IP:端口 / 留空为本机重定向)</label>
+          <input type="text" class="form-control" id="ruleTarget" placeholder="例如: 192.168.1.10:443 或 留空本机">
+        </div>
+        <div class="form-group">
+          <label>备注说明 (可选)</label>
+          <input type="text" class="form-control" id="ruleComment" placeholder="例如: 家中NAS / 节点转发">
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px;">
+          <button type="button" class="btn btn-outline" onclick="closeAddModal()">取消</button>
+          <button type="submit" class="btn btn-primary">确认添加</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    function showToast(msg, isErr = false) {
+      const t = document.getElementById('toast');
+      t.innerText = msg;
+      t.style.borderColor = isErr ? 'var(--danger)' : 'var(--success)';
+      t.style.display = 'block';
+      setTimeout(() => { t.style.display = 'none'; }, 2600);
+    }
+
+    function switchTab(name) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById('tab-forward').style.display = name === 'forward' ? 'block' : 'none';
+      document.getElementById('tab-raw').style.display = name === 'raw' ? 'block' : 'none';
+      if (name === 'raw') loadRawRuleset();
+    }
+
+    function openAddModal() {
+      document.getElementById('addModal').classList.add('open');
+      document.getElementById('ruleSrcPort').value = '';
+      document.getElementById('ruleTarget').value = '';
+      document.getElementById('ruleComment').value = '';
+    }
+
+    function closeAddModal() {
+      document.getElementById('addModal').classList.remove('open');
+    }
+
+    function generateRandomPort() {
+      const port = Math.floor(Math.random() * 50000) + 10000;
+      document.getElementById('ruleSrcPort').value = port;
+    }
+
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        document.getElementById('server-addr').innerText = data.bind_addr || '0.0.0.0';
+        document.getElementById('forward-status').innerText = data.ipv4_forward ? '已开启' : '未开启';
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function loadRules() {
+      try {
+        const res = await fetch('/api/forward/list');
+        const list = await res.json();
+        const tbody = document.getElementById('rules-tbody');
+        document.getElementById('rule-count').innerText = `${list.length} 条`;
+
+        if (!list || list.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无端口转发规则，点击右上角新建</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = list.map(r => {
+          const protoBadge = `<span class="badge badge-${r.protocol}">${r.protocol}</span>`;
+          const targetStr = r.type === 'redirect' ? `本机:${r.dst_port}` : `${r.dst_host}:${r.dst_port}`;
+          return `
+            <tr>
+              <td>${protoBadge}</td>
+              <td style="font-weight:600; font-family:var(--font-mono);">${r.src_port}</td>
+              <td style="font-family:var(--font-mono);">${targetStr}</td>
+              <td><span style="font-size:12px; color:var(--text-muted);">${r.type}</span></td>
+              <td>${r.comment || '-'}</td>
+              <td style="color:var(--text-muted); font-size:12px;">#${r.handle}</td>
+              <td style="text-align: right;">
+                <button class="btn btn-danger btn-sm" onclick="deleteRule(${r.handle})">删除</button>
+              </td>
+            </tr>
+          `;
+        }).join('');
+      } catch (e) {
+        showToast('获取规则失败: ' + e, true);
+      }
+    }
+
+    async function submitRule(e) {
+      e.preventDefault();
+      let srcPort = parseInt(document.getElementById('ruleSrcPort').value);
+      if (!srcPort) {
+        srcPort = Math.floor(Math.random() * 50000) + 10000;
+      }
+      const proto = document.getElementById('ruleProto').value;
+      const target = document.getElementById('ruleTarget').value.trim();
+      const comment = document.getElementById('ruleComment').value.trim();
+
+      let dstHost = "";
+      let dstPort = srcPort;
+
+      if (target) {
+        if (target.includes(':')) {
+          const parts = target.split(':');
+          dstHost = parts[0];
+          dstPort = parseInt(parts[1]) || srcPort;
+        } else {
+          dstHost = target;
+        }
+      }
+
+      try {
+        const res = await fetch('/api/forward/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            protocol: proto,
+            src_port: srcPort,
+            dst_host: dstHost,
+            dst_port: dstPort,
+            comment: comment
+          })
+        });
+        const ret = await res.json();
+        if (ret.success) {
+          showToast('添加并保存成功！');
+          closeAddModal();
+          loadRules();
+        } else {
+          showToast('添加失败: ' + ret.error, true);
+        }
+      } catch (err) {
+        showToast('网络请求异常: ' + err, true);
+      }
+    }
+
+    async function deleteRule(handle) {
+      if (!confirm(`确定要删除句柄为 #${handle} 的规则吗？`)) return;
+      try {
+        const res = await fetch('/api/forward/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ handle: handle })
+        });
+        const ret = await res.json();
+        if (ret.success) {
+          showToast('规则已删除');
+          loadRules();
+        } else {
+          showToast('删除失败: ' + ret.error, true);
+        }
+      } catch (e) {
+        showToast('删除请求异常', true);
+      }
+    }
+
+    async function loadRawRuleset() {
+      try {
+        const res = await fetch('/api/ruleset');
+        const data = await res.json();
+        document.getElementById('raw-ruleset').innerText = data.ruleset || '（暂无规则）';
+      } catch (e) {
+        document.getElementById('raw-ruleset').innerText = '加载失败: ' + e;
+      }
+    }
+
+    async function saveRuleset() {
+      try {
+        const res = await fetch('/api/ruleset/save', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          showToast('规则已持久化保存至 /etc/nftables.conf');
+        } else {
+          showToast('保存失败: ' + data.error, true);
+        }
+      } catch (e) {
+        showToast('请求失败', true);
+      }
+    }
+
+    async function flushRuleset() {
+      if (!confirm('⚠️ 警告: 这将清空当前所有 nftables 规则！确定执行吗？')) return;
+      try {
+        const res = await fetch('/api/ruleset/flush', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          showToast('规则集已清空');
+          loadRules();
+          loadRawRuleset();
+        } else {
+          showToast('清空失败: ' + data.error, true);
+        }
+      } catch (e) {
+        showToast('清空异常', true);
+      }
+    }
+
+    // 初始化
+    fetchStatus();
+    loadRules();
+  </script>
+</body>
+</html>
