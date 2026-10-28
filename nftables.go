@@ -16,6 +16,9 @@ import (
 // ForwardRule 代表一条端口转发规则
 type ForwardRule struct {
 	Handle   int    `json:"handle"`
+	Family   string `json:"family"`   // ip 或 inet
+	Table    string `json:"table"`    // 表名（通常是 nat）
+	Chain    string `json:"chain"`    // 链名（prerouting 或 PREROUTING）
 	Protocol string `json:"protocol"` // tcp, udp
 	SrcPort  int    `json:"src_port"`
 	DstHost  string `json:"dst_host"` // 空代表本机重定向
@@ -140,21 +143,23 @@ func CheckAndEnableIPv4Forward() error {
 	return nil
 }
 
-// EnsureBaseTables 确保 NAT 表和必要的链结构存在
+// EnsureBaseTables 确保 NAT 表和基本的 prerouting 链存在
 func EnsureBaseTables() error {
-	// 创建 ip nat 表和基本链
+	out, _ := runNftOutput("list", "ruleset")
+	if strings.Contains(strings.ToLower(out), "hook prerouting") {
+		return nil
+	}
+
 	cmds := [][]string{
 		{"add", "table", "ip", "nat"},
 		{"add", "chain", "ip", "nat", "prerouting", "{ type nat hook prerouting priority -100; policy accept; }"},
 		{"add", "chain", "ip", "nat", "postrouting", "{ type nat hook postrouting priority 100; policy accept; }"},
-		// 确保 postrouting 中包含一条基本的 masquerade
 		{"add", "rule", "ip", "nat", "postrouting", "masquerade"},
 	}
 
 	for _, c := range cmds {
 		_ = runNft(c...)
 	}
-
 	return nil
 }
 
@@ -181,13 +186,13 @@ func runNftOutput(args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// GetForwardRules 获取所有端口转发规则
+// GetForwardRules 获取系统内所有端口转发规则
 func GetForwardRules() ([]ForwardRule, error) {
-	out, err := runNftOutput("-a", "list", "chain", "ip", "nat", "prerouting")
+	// 使用 -n 保持数字端口/IP，-a 输出 handle 编号
+	out, err := runNftOutput("-n", "-a", "list", "ruleset")
 	if err != nil {
-		// 如果表不存在，尝试先初始化
 		_ = EnsureBaseTables()
-		out, err = runNftOutput("-a", "list", "chain", "ip", "nat", "prerouting")
+		out, err = runNftOutput("-n", "-a", "list", "ruleset")
 		if err != nil {
 			return nil, err
 		}
@@ -196,58 +201,79 @@ func GetForwardRules() ([]ForwardRule, error) {
 	var rules []ForwardRule
 	lines := strings.Split(out, "\n")
 
-	// 正则匹配示例:
-	// tcp dport 8443 dnat to 192.168.1.10:443 comment "test" # handle 5
-	// udp dport 8443 redirect to :8080 # handle 6
-	reHandle := regexp.MustCompile(`# handle (\d+)`)
-	reComment := regexp.MustCompile(`comment "(.*?)"`)
-	reDnat := regexp.MustCompile(`(tcp|udp)\s+dport\s+(\d+)\s+dnat\s+to\s+([a-zA-Z0-9\.\_\-]+)(?::(\d+))?`)
-	reRedirect := regexp.MustCompile(`(tcp|udp)\s+dport\s+(\d+)\s+redirect(?:\s+to\s+:?(\d+))?`)
+	reTable := regexp.MustCompile(`table\s+(ip|inet)\s+([a-zA-Z0-9_\-]+)`)
+	reChain := regexp.MustCompile(`chain\s+([a-zA-Z0-9_\-]+)`)
+	reHandle := regexp.MustCompile(`#\s*handle\s+(\d+)`)
+	reComment := regexp.MustCompile(`comment\s+"([^"]*)"`)
+	reProto := regexp.MustCompile(`\b(tcp|udp)\b`)
+	reDport := regexp.MustCompile(`\bdport\s+(\d+)\b`)
+	reDnat := regexp.MustCompile(`\bdnat\s+to\s+([a-zA-Z0-9\.\_\-]+)(?::(\d+))?`)
+	reRedirect := regexp.MustCompile(`\bredirect(?:\s+to\s+:?(\d+))?`)
+
+	currFamily := "ip"
+	currTable := "nat"
+	currChain := "prerouting"
 
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if !strings.Contains(line, "dnat") && !strings.Contains(line, "redirect") {
+		trimmed := strings.TrimSpace(line)
+
+		// 追踪当前 table
+		if m := reTable.FindStringSubmatch(trimmed); len(m) > 2 {
+			currFamily = m[1]
+			currTable = m[2]
 			continue
 		}
 
-		rule := ForwardRule{Raw: line}
+		// 追踪当前 chain
+		if m := reChain.FindStringSubmatch(trimmed); len(m) > 1 {
+			currChain = m[1]
+			continue
+		}
 
-		// 解析 handle
-		if m := reHandle.FindStringSubmatch(line); len(m) > 1 {
+		if !strings.Contains(trimmed, "dnat") && !strings.Contains(trimmed, "redirect") {
+			continue
+		}
+
+		rule := ForwardRule{
+			Raw:    trimmed,
+			Family: currFamily,
+			Table:  currTable,
+			Chain:  currChain,
+		}
+
+		if m := reHandle.FindStringSubmatch(trimmed); len(m) > 1 {
 			rule.Handle, _ = strconv.Atoi(m[1])
 		}
-
-		// 解析 comment
-		if m := reComment.FindStringSubmatch(line); len(m) > 1 {
+		if m := reComment.FindStringSubmatch(trimmed); len(m) > 1 {
 			rule.Comment = m[1]
 		}
-
-		// 解析 dnat
-		if m := reDnat.FindStringSubmatch(line); len(m) > 1 {
+		if m := reProto.FindStringSubmatch(trimmed); len(m) > 1 {
 			rule.Protocol = m[1]
-			rule.SrcPort, _ = strconv.Atoi(m[2])
-			rule.DstHost = m[3]
-			if len(m) > 4 && m[4] != "" {
-				rule.DstPort, _ = strconv.Atoi(m[4])
+		}
+		if m := reDport.FindStringSubmatch(trimmed); len(m) > 1 {
+			rule.SrcPort, _ = strconv.Atoi(m[1])
+		}
+
+		if m := reDnat.FindStringSubmatch(trimmed); len(m) > 1 {
+			rule.Type = "dnat"
+			rule.DstHost = m[1]
+			if len(m) > 2 && m[2] != "" {
+				rule.DstPort, _ = strconv.Atoi(m[2])
 			} else {
 				rule.DstPort = rule.SrcPort
 			}
-			rule.Type = "dnat"
 			rules = append(rules, rule)
 			continue
 		}
 
-		// 解析 redirect
-		if m := reRedirect.FindStringSubmatch(line); len(m) > 1 {
-			rule.Protocol = m[1]
-			rule.SrcPort, _ = strconv.Atoi(m[2])
+		if m := reRedirect.FindStringSubmatch(trimmed); len(m) > 1 {
+			rule.Type = "redirect"
 			rule.DstHost = "127.0.0.1"
-			if len(m) > 3 && m[3] != "" {
-				rule.DstPort, _ = strconv.Atoi(m[3])
+			if len(m) > 1 && m[1] != "" {
+				rule.DstPort, _ = strconv.Atoi(m[1])
 			} else {
 				rule.DstPort = rule.SrcPort
 			}
-			rule.Type = "redirect"
 			rules = append(rules, rule)
 			continue
 		}
@@ -260,6 +286,25 @@ func GetForwardRules() ([]ForwardRule, error) {
 func AddForwardRule(protocol string, srcPort int, dstHost string, dstPort int, comment string) error {
 	if err := EnsureBaseTables(); err != nil {
 		return err
+	}
+
+	// 探测系统中现存的 prerouting 链名（优先复用 PREROUTING 或 prerouting）
+	targetChain := "prerouting"
+	targetFamily := "ip"
+	targetTable := "nat"
+
+	rules, _ := GetForwardRules()
+	if len(rules) > 0 {
+		targetChain = rules[0].Chain
+		targetFamily = rules[0].Family
+		targetTable = rules[0].Table
+	} else {
+		// 探测已有规则集
+		if out, err := runNftOutput("list", "chains"); err == nil {
+			if strings.Contains(out, "chain ip nat PREROUTING") {
+				targetChain = "PREROUTING"
+			}
+		}
 	}
 
 	protos := []string{}
@@ -279,7 +324,7 @@ func AddForwardRule(protocol string, srcPort int, dstHost string, dstPort int, c
 	}
 
 	for _, p := range protos {
-		args := []string{"add", "rule", "ip", "nat", "prerouting", p, "dport", strconv.Itoa(srcPort)}
+		args := []string{"add", "rule", targetFamily, targetTable, targetChain, p, "dport", strconv.Itoa(srcPort)}
 		if dstHost == "" || dstHost == "127.0.0.1" || dstHost == "localhost" {
 			args = append(args, "redirect", "to", fmt.Sprintf(":%d", dstPort))
 		} else {
@@ -303,9 +348,41 @@ func DeleteForwardRuleByHandle(handle int) error {
 	if handle <= 0 {
 		return fmt.Errorf("无效的 handle 编号")
 	}
-	err := runNft("delete", "rule", "ip", "nat", "prerouting", "handle", strconv.Itoa(handle))
+
+	// 从当前规则查找该 handle 属于哪个 family/table/chain
+	rules, err := GetForwardRules()
 	if err != nil {
 		return err
+	}
+
+	family := "ip"
+	table := "nat"
+	chain := "prerouting"
+	found := false
+
+	for _, r := range rules {
+		if r.Handle == handle {
+			family = r.Family
+			table = r.Table
+			chain = r.Chain
+			found = true
+			break
+		}
+	}
+
+	var deleteErr error
+	if found {
+		deleteErr = runNft("delete", "rule", family, table, chain, "handle", strconv.Itoa(handle))
+	} else {
+		// 兜底尝试默认路径及大写 PREROUTING
+		deleteErr = runNft("delete", "rule", "ip", "nat", "prerouting", "handle", strconv.Itoa(handle))
+		if deleteErr != nil {
+			deleteErr = runNft("delete", "rule", "ip", "nat", "PREROUTING", "handle", strconv.Itoa(handle))
+		}
+	}
+
+	if deleteErr != nil {
+		return deleteErr
 	}
 	return SaveRulesetToFile()
 }
